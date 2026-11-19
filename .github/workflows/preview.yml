@@ -1,0 +1,61 @@
+# Preview for review (plan.md § 3 and § 4, ADR 0003).
+# Builds the page in CI and deploys it to GitHub Pages, so no preview file is ever in git.
+# Run by hand: Actions > preview > Run workflow, or `gh workflow run preview.yml -f marker=on`.
+name: preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      marker:
+        description: "on: banner shows the lane marker (secret LANE_MARKER). off: clean-up, no marker set."
+        required: true
+        default: "on"
+        type: choice
+        options: ["on", "off"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Save /digest/2026-10-28 as one HTML file
+        env:
+          LANE_MARKER: ${{ inputs.marker == 'on' && secrets.LANE_MARKER || '' }}
+        run: |
+          npx tsx src/server.ts > rig.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://localhost:8787/health >/dev/null && break; sleep 1; done
+          mkdir -p site
+          curl -sf http://localhost:8787/digest/2026-10-28 -o site/index.html
+          if [ "${{ inputs.marker }}" = "off" ]; then
+            grep -q "no marker set" site/index.html
+          else
+            ! grep -q "no marker set" site/index.html
+          fi
+          grep -q "<table" site/index.html
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
